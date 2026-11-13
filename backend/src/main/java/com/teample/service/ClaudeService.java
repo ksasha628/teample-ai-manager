@@ -2,6 +2,7 @@ package com.teample.service;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.anthropic.core.JsonValue;
 import com.anthropic.models.messages.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
@@ -58,6 +60,7 @@ public class ClaudeService {
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(Model.CLAUDE_SONNET_4_5)
                 .maxTokens(MAX_OUTPUT_TOKENS)
+                .outputConfig(OutputConfig.builder().format(minutesOutputFormat()).build())
                 .addUserMessage(prompt)
                 .build();
 
@@ -77,6 +80,52 @@ public class ClaudeService {
         }
 
         return parseResponse(responseText);
+    }
+
+    /**
+     * Structured Outputs 스키마. 원문 인용(evidence)에 따옴표가 섞여도 API가 유효한 JSON만 생성하도록 강제한다.
+     * 필드를 바꾸면 buildPrompt의 예시 JSON과 parseResponse도 함께 맞춘다.
+     */
+    static JsonOutputFormat minutesOutputFormat() {
+        Map<String, Object> stringArray = Map.of("type", "array", "items", Map.of("type", "string"));
+        Map<String, Object> todo = Map.of(
+                "type", "object",
+                "properties", Map.of(
+                        "name", Map.of("type", "string"),
+                        "task", Map.of("type", "string"),
+                        "deadline", Map.of("type", "string")),
+                "required", List.of("name", "task", "deadline"),
+                "additionalProperties", false);
+        Map<String, Object> evidence = Map.of(
+                "type", "object",
+                "properties", Map.of(
+                        "title", Map.of("type", "string"),
+                        "topic", Map.of("type", "string"),
+                        "discussions", stringArray,
+                        "decisions", stringArray,
+                        "pending", stringArray,
+                        "todos", stringArray,
+                        "nextAgenda", stringArray),
+                "required", List.of("title", "topic", "discussions", "decisions", "pending", "todos", "nextAgenda"),
+                "additionalProperties", false);
+
+        return JsonOutputFormat.builder()
+                .schema(JsonOutputFormat.Schema.builder()
+                        .putAdditionalProperty("type", JsonValue.from("object"))
+                        .putAdditionalProperty("properties", JsonValue.from(Map.of(
+                                "title", Map.of("type", "string"),
+                                "topic", Map.of("type", "string"),
+                                "discussions", stringArray,
+                                "decisions", stringArray,
+                                "pending", stringArray,
+                                "todos", Map.of("type", "array", "items", todo),
+                                "nextAgenda", stringArray,
+                                "evidence", evidence)))
+                        .putAdditionalProperty("required", JsonValue.from(List.of(
+                                "title", "topic", "discussions", "decisions", "pending", "todos", "nextAgenda", "evidence")))
+                        .putAdditionalProperty("additionalProperties", JsonValue.from(false))
+                        .build())
+                .build();
     }
 
     private boolean isMaxTokensStopReason(Message message) {
